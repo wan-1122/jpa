@@ -1,0 +1,167 @@
+4년 전 작업물
+
+1.
+	javax.persistence.EntityManager
+	javax.persistence.criteria.CriteriaBuilder
+		
+
+		List<Tag> tags = tagRepository.findAll(new Specification<Tag>() {			
+			@Override
+			public Predicate toPredicate(Root<Tag> root, CriteriaQuery<?> query, CriteriaBuilder cb) {
+		        Predicate p = cb.conjunction();
+		        p.getExpressions().add(cb.and(
+	            		cb.equal(root.get("createId"), filter.get("userId"))
+	            		));
+				return p;
+			}
+		});
+		
+2.
+	public class ContentsReceivePinSpecification implements Specification<ContentsReceivePin> {
+	    private Map<String, Object> filter = new HashMap<>();
+
+	    public ContentsReceivePinSpecification(Map<String, Object> filter) {
+	        super();
+	        this.filter.clear();
+	        this.filter.putAll(filter);
+	    }
+
+	    @Override
+	    public Predicate toPredicate(Root<ContentsReceivePin> root, CriteriaQuery<?> cq,
+	            CriteriaBuilder cb) {
+	        Predicate p = cb.conjunction();
+
+
+	        if (filter.containsKey("mediaTypes") && filter.get("mediaTypes") != null) {
+	        	List<String> parentList = (List<String>) filter.get("mediaTypes");
+
+	        	Expression<String> parentExpression = root.get("contentsReceive").get("mediaType");
+	        	Predicate parentPredicate = parentExpression.in(parentList);
+	        	
+	            p.getExpressions().add(cb.and(parentPredicate));
+	        }
+	        
+	        if (filter.containsKey("userId") && filter.get("userId") != null) {
+	        	p.getExpressions().add(cb.and(
+	            		cb.equal(root.get("contentsReceive").get("createId"), filter.get("userId"))
+	            		));
+			}
+	        
+	        if (filter.containsKey("contentsReceiveId") && filter.get("contentsReceiveId") != null) {
+	        	Expression<Long> parentExpression = root.get("contentsReceive").get("contentsReceiveId");
+	            p.getExpressions().add(cb.and(cb.lessThan(parentExpression, Long.valueOf((String) filter.get("contentsReceiveId")))));
+			}
+	        
+	        if (filter.containsKey("keyword") && filter.get("keyword") != null) {
+//	        	CriteriaQuery<Serializable> criteria = cb.getCriteria();
+	        	javax.persistence.criteria.Subquery<Page> subquery = cq.subquery(Page.class);
+    		    Root<Page> subroot = subquery.from(Page.class);
+    		    subquery.select(subroot.get("pageId"))
+    		    .where(
+    		    		cb.equal(root.get("contentsReceive"), subroot.get("contentsReceive"))
+    		    		, cb.like(subroot.get("title"), WILDCARD + filter.get("keyword").toString() + WILDCARD)
+    		    		);
+	            p.getExpressions().add(cb.and(
+	            		cb.or(
+	            				cb.like(root.get("contentsReceive").get("contents"), WILDCARD + filter.get("keyword").toString() + WILDCARD), 
+	            				cb.like(root.get("contentsReceive").get("linkUrl"), WILDCARD + filter.get("keyword").toString() + WILDCARD),
+	            				cb.exists(subquery))
+	            		)
+	            );
+	        }
+	        
+
+	        return p;
+	    }
+	}
+	
+	
+	////////////////
+	
+    	int currentPageInt = Integer.parseInt(currentPage) - 1;
+    	int pageSize = 50;
+    	PageRequest pageRequest = new PageRequest(currentPageInt, pageSize, new Sort(Direction.DESC, "contentsReceivePinId"));
+    	
+    	boolean isMain = false;
+    	List<ContentsReceiveDTO> resultList = new ArrayList<>();
+    	org.springframework.data.domain.Page<ContentsReceivePin> list = contentsReceiveService.findAll(new ContentsReceivePinSpecification(filterMap), pageRequest);
+    	list.forEach(pin -> {
+    		ContentsReceive x = pin.getContentsReceive();
+    		Page page = x.getPage();
+    		PageDTO pageDTO = new PageDTO();
+    		if (page != null) {
+	    		pageDTO = convertToDto(page, PageDTO.class);
+			}
+    		List<ContentsTag> contentsTags = x.getContentsTags();
+    		List<ContentsTagDTO> newContentsTags = new ArrayList<>();
+    		if (CollectionUtils.isNotEmpty(contentsTags)) {
+    			contentsTags.forEach(y -> {
+    				ContentsTagDTO contentsTagDTO = convertToDto(y, ContentsTagDTO.class);
+    				Tag tag = y.getTag();
+
+    				TagDTO tagDTO = convertToDto(tag, TagDTO.class);
+    				contentsTagDTO.setTag(tagDTO);
+    				newContentsTags.add(contentsTagDTO);
+    			});
+			}
+    		x.setContentsTags(null);
+    		ContentsReceiveDTO contentsReceiveDTO2 = convertToDto(x, ContentsReceiveDTO.class);
+    		contentsReceiveDTO2.setPage(pageDTO);
+    		contentsReceiveDTO2.setContentsTags(newContentsTags);
+    		if (contentsReceiveDTO2.getLinkUrl() != null) {
+    			int idx = contentsReceiveDTO2.getLinkUrl().lastIndexOf(".");
+    			if (idx > -1) {
+					String extension = contentsReceiveDTO2.getLinkUrl().substring(idx).toLowerCase();
+
+	        		if (extension.endsWith("jpg")
+	        				|| extension.endsWith("png")
+	        				|| extension.endsWith("gif")) {
+	    				contentsReceiveDTO2.setMediaType("image");
+	    			}
+				}	
+			}
+    		try {
+    			ContentsReceivePin contentsReceivePin = x.getContentsReceivePin();
+    			if (contentsReceivePin != null) {
+    				ContentsReceivePinDTO contentsReceivePinDTO2 = convertToDto(contentsReceivePin, ContentsReceivePinDTO.class);
+    				contentsReceiveDTO2.setContentsReceivePin(contentsReceivePinDTO2);
+    			}
+    		} catch (Exception e) {
+    			e.printStackTrace();
+			}
+    		resultList.add(contentsReceiveDTO2);
+    	});
+    	model.addAttribute("list", resultList);
+    	return success(model.asMap());
+    }
+	
+	
+3.
+
+import org.springframework.cache.annotation.CacheConfig;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+
+@Resource
+@CacheConfig(cacheNames = "contentsReceive")
+public interface ContentsReceiveRepository
+		extends /* JpaRepository<AguBoard, Long>, */JpaSpecificationExecutor<ContentsReceive>, JpaRepository<ContentsReceive, Long> {
+	
+	@Override
+	@Cacheable
+	List<ContentsReceive> findAll(Specification<ContentsReceive> spec);
+	
+	@Override
+	@Cacheable
+	Page<ContentsReceive> findAll(Specification<ContentsReceive> spec, Pageable pageable);
+	
+	@Override
+	@CacheEvict
+	<S extends ContentsReceive> S save(S entity);
+}
+
